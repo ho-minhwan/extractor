@@ -1,0 +1,85 @@
+type: local
+
+logger:
+    console:
+        level: INFO
+    file:
+        path: "logs/logger.log"
+        level: INFO
+        retention: 90
+
+schedule:
+    #set schedule for Windows service version of extractor
+    # Technical Specification baseline (CDF UI export had "* * * * *")
+    schedule: "0 */6 * * *"
+
+cognite:
+    # Read these from environment variables
+    host: ${CDF_URL}
+    project: ${CDF_PROJECT}
+
+    idp-authentication:
+        token-url: ${IDP_TOKEN_URL}
+
+        client-id: ${IDP_CLIENT_ID}
+        secret: ${IDP_CLIENT_SECRET}
+        scopes:
+            - ${CDF_URL}/.default
+    extraction-pipeline:
+        external-id: "ep_aveva_ue_technical_extraction"
+
+raw:
+    #state store
+    last_run:
+        database: statestore
+        table: aveva_ue_technical_extraction
+    #storage
+    storage_db: aveva_technical
+
+
+aveva:
+    # access
+    bearer_token: ${AVEVA_UE_BEARER_TOKEN}
+    # extractor settings
+    max_retry_attempts: 5
+    retry_internal_seconds: 5
+    number_worker_threads: 4
+    #Aveva UE sources to extract
+    source_configs:
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "Pipeline-Summary-DBView-Grid"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "CentrifugalPump-DBView-Grid"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "ElectricMotors-DBView-Grid"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "PressureVesselSummary-DBView-Grid"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "STD_003_ValveList"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "FlowInst-OrificePlate-DBView-Grid"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "Loops-DBView-Grid"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "Instruments-DBView-Grid"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "JunctionBoxes-DBView-Grid"
+    - datasource: "UE-ENG-UERP"
+      category: "Engineering"
+      table_name: "Inst-EquipmentList-DBView-Grid"
+
+metrics:
+    cognite:
+        external_id_prefix: "aveva_technical_"
+        push_interval: "1h"
+        data_set:
+            external_id: "ds_aveva_technical_metrics"

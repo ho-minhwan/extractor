@@ -1,0 +1,17 @@
+type: remote
+
+cognite:
+    # Read these from environment variables
+    host: ${CDF_URL}
+    project: ${CDF_PROJECT}
+
+    idp-authentication:
+        token-url: ${IDP_TOKEN_URL}
+
+        client-id: ${IDP_CLIENT_ID}
+        secret: ${IDP_CLIENT_SECRET}
+        scopes:
+            - ${CDF_URL}/.default
+
+    extraction-pipeline:
+        external-id: "ep_scm_all_oracle"

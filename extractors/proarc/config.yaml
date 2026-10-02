@@ -1,0 +1,141 @@
+type: local
+
+logger:
+    console:
+        level: INFO
+    file:
+        level: INFO
+        path: "logs/logger.log"
+        retention: 90
+schedule:
+    #set schedule for Windows service version of extractor
+    schedule: "0 */12 * * *"
+    # Unchanged pending client review of weekly full-sync. Not present in CDF UI export.
+    data_sync_schedule: "50 11 * * 0"
+
+cognite:
+# Read these from environment variables
+    host: ${CDF_URL}
+    project: ${CDF_PROJECT}
+
+    idp-authentication:
+        token-url: ${IDP_TOKEN_URL}
+
+        client-id: ${IDP_CLIENT_ID}
+        secret: ${IDP_CLIENT_SECRET}
+        scopes:
+            - ${CDF_URL}/.default
+    extraction-pipeline:
+        external-id: "ep_files_all_proarc"
+
+raw:
+    #state store
+    last_run:
+        database: statestore
+        table: proarc_file_extraction
+    #document
+    document_md:
+        database: proarc
+        table: document_md
+    document_md_key: 'rno'
+    #revision
+    revision_md:
+        database: proarc
+        table: revision_md
+    revision_md_key:
+        - 'documentRno'
+        - 'revisionRno'
+    #file
+    file_md:
+        database: proarc
+        table: file_md
+    file_md_key: 'fileRno'
+
+
+proarc:
+    user_name: ${PROARC_USERNAME}
+    password: ${PROARC_PASSWORD}
+    #Proarc repositories and projects to extract
+    repos:
+      - repo_no: "6"
+        project_no: "11NNN3"
+        file_instance_space: "Test_venus_space_instance"
+    # - repo_no: "2"
+    #   project_no: "10S0162"
+    #   file_instance_space: "sp_p91_prefeed"
+    # - repo_no: "2"
+    #   project_no: "10ITT91"
+    #   file_instance_space: "sp_p91_itt"
+    increment_variable: "MODIFIED_M" #metadata items compared against last extractor run time
+    #get_proarc_token
+    access_token_url: "https://hodms.proarconline.com/sts/connect/token"
+    access_token_creds: ${PROARC_TOKEN_CREDS} #Base64 encoded client_id:client_secret
+    #search_documents
+    search_documents_url: "https://hodms.proarconline.com/proarc/api/repository/{REPO_NUM}/document/search"
+    search_documents_criteria:
+      items:
+        - name: status
+          operator: 0
+          value: "Latest"
+
+        - name: repositoryRno
+          operator: 0
+          value: REPO_NUM
+
+        - name: INCREMENT_VAR
+          operator: 5
+          value: LAST_RUN_ISO_TIME
+
+      criterias:
+        - items:
+            - name: PROJECT_NO
+              operator: 0
+              value: PROJECT_NUM
+          operator: 1
+          criterias: []
+
+      operator: 0
+
+    #20260821 TEST
+    sync_documents_criteria:
+       items:
+         - name: status
+           operator: 0
+           value: "Latest"
+
+         - name: repositoryRno
+           operator: 0
+           value: REPO_NUM
+
+       criterias:
+         - items:
+             - name: PROJECT_NO
+               operator: 0
+               value: PROJECT_NUM
+           operator: 1
+           criterias: []
+       operator: 0
+
+    #get_revisions
+    get_revisions_url: "https://hodms.proarconline.com/proarc/api/document/{document}/revision/search"
+    get_revisions_criteria:
+      items:
+        - name: status
+          operator: 0
+          value: "Latest"
+
+    #get_files
+    get_files_search_url: "https://hodms.proarconline.com/proarc/api/document/{document}/revision/{revision}/file/search"
+    get_files_export_url: "https://hodms.proarconline.com/proarc/api/file/{file_rno}/export"
+    get_files_criteria:
+      items:
+        - name: status
+          operator: 0
+          #value: REPO_NUM
+
+metrics:
+    cognite:
+        external_id_prefix: ""
+        push_interval: "5m"
+        data_set:
+            external_id: "ds_proarc_metrics"
