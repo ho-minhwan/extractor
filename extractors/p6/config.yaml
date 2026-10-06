@@ -1,0 +1,65 @@
+type: local
+
+logger:
+    console:
+        level: INFO
+    file:
+        path: "logs/logger.log"
+        level: INFO
+        retention: 90
+
+schedule:
+    schedule: "0 */12 * * *"
+
+cognite:
+    host: ${CDF_URL}
+    project: ${CDF_PROJECT}
+
+    idp-authentication:
+        token-url: ${IDP_TOKEN_URL}
+        client-id: ${IDP_CLIENT_ID}
+        secret: ${IDP_CLIENT_SECRET}
+        scopes:
+            - ${CDF_URL}/.default
+
+    extraction-pipeline:
+        external-id: "ep_p6_projects_activities"
+
+raw:
+    last_run:
+        database: statestore
+        table: p6_extraction
+
+p6:
+    base_url: ${P6_BASE_URL}
+    user_name: ${P6_USERNAME}
+    password: ${P6_PASSWORD}
+    timeout: 60
+    query_limit: 500
+    project_data:
+        endpoint: "/api/project"
+        raw_table:
+            database: p6
+            table: project
+        raw_key: "ObjectId"
+        response_items_key: "items"
+        has_more_field: "hasMore"
+        limit_parameter: "limit"
+        offset_parameter: "offset"
+    activity_data:
+        endpoint: "/api/activity"
+        raw_table:
+            database: p6
+            table: activity
+        raw_key: "ObjectId"
+        response_items_key: "items"
+        has_more_field: "hasMore"
+        limit_parameter: "limit"
+        offset_parameter: "offset"
+
+metrics:
+    cognite:
+        external_id_prefix: "p6_"
+        push_interval: "5m"
+        data_set:
+            external_id: "ds_p6_metrics"

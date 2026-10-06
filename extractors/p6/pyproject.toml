@@ -1,0 +1,14 @@
+[project]
+name = "p6_extractor"
+version = "1.0.0"
+description = "Extractor for Oracle Primavera P6 EPPM"
+requires-python = ">=3.11"
+readme = "README.md"
+
+dependencies = [
+    "cognite-extractor-utils>=7.9.0",
+    "cognite-sdk>=7.86.0",
+    "pywin32>=306 ; sys_platform == 'win32'",
+    "cronex",
+    "requests",
+]
