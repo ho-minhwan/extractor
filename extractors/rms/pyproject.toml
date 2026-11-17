@@ -1,0 +1,13 @@
+[project]
+name = "rms_extractor"
+version = "1.0.0"
+description = "Extractor for RMS database ingestion"
+requires-python = ">=3.11"
+readme = "README.md"
+
+dependencies = [
+    "cognite-extractor-utils>=7.9.0",
+    "cognite-sdk>=7.86.0",
+    "sqlalchemy>=2.0.0",
+    "cronex"
+]

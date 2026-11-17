@@ -1,0 +1,32 @@
+type: remote
+
+cognite:
+    host: ${CDF_URL}
+    project: ${CDF_PROJECT}
+
+    idp-authentication:
+        token-url: ${IDP_TOKEN_URL}
+        client-id: ${IDP_CLIENT_ID}
+        secret: ${IDP_CLIENT_SECRET}
+        scopes:
+            - ${CDF_URL}/.default
+
+    extraction-pipeline:
+        external-id: "ep_rms_ingestion"
+
+raw:
+    database: ${CDF_RAW_DB}
+    table: ${CDF_RAW_STATE_TABLE}
+
+rms:
+    db:
+        url: ${RMS_DB_URL}
+        query_timeout_seconds: 30
+        batch_size: 500
+    raw_database: ${CDF_RAW_DB}
+    table_names:
+        - risk_master
+        - risk_cycle
+    raw_key_fields:
+        risk_master: risk_id
+        risk_cycle: cycle_id
