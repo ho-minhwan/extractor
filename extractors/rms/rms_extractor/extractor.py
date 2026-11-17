@@ -1,8 +1,11 @@
 """RMS extractor implementation."""
 
-import datetime
+import datetime as dt
 import json
+import re
+from decimal import Decimal
 from logging import getLogger
+from typing import Any
 
 from cognite.client import CogniteClient
 from cognite.client.data_classes import ExtractionPipelineRunWrite, Row
@@ -15,130 +18,140 @@ from rms_extractor.config import Config
 from rms_extractor.metrics import RMSMetrics
 
 logger = getLogger(__name__)
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def create_state_store(client: CogniteClient, config) -> tuple[RawStateStore, str, float]:
-    """Create the state store used to track successful execution."""
+def create_state_store(client: CogniteClient, config) -> RawStateStore:
+    """Initialize the CDF Raw state store."""
     state_store = RawStateStore(cdf_client=client, database=config.database, table=config.table)
     state_store.initialize()
-    last_run_utc = state_store.get_state(external_id="last_run_utc")[1]
-    last_run_epoch = state_store.get_state(external_id="last_run_epoch")[1]
-    return state_store, last_run_utc, last_run_epoch
-
-
-def _serialize_value(value):
-    if value is None:
-        return None
-    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
-        return value.isoformat()
-    if isinstance(value, (str, int, float, bool)):
-        return value
-    return json.dumps(value, default=str, ensure_ascii=False)
+    return state_store
 
 
 def get_db_engine(db_url: str):
-    """Build a SQLAlchemy engine for the configured RMS database."""
-    engine_kwargs = {}
+    """Build a SQLAlchemy engine; switching DB vendors is done by changing RMS_DB_URL."""
+    options: dict[str, Any] = {"pool_pre_ping": True}
     if db_url.startswith("sqlite"):
-        engine_kwargs["connect_args"] = {"check_same_thread": False}
-    return create_engine(db_url, **engine_kwargs)
+        options["connect_args"] = {"check_same_thread": False, "timeout": 30}
+    return create_engine(db_url, **options)
 
 
-def fetch_table_rows(engine, table_name: str):
-    """Return all rows from a table as a list of dictionaries."""
-    with engine.connect() as conn:
-        result = conn.execute(text(f"SELECT * FROM {table_name}"))
-        rows = result.mappings().all()
-    return rows
-
-
-def get_table_key(table_name: str, row: dict, config: Config) -> str:
-    """Build a unique raw row key for the table."""
-    raw_key_field = config.rms.raw_key_fields.get(table_name, "id")
-    value = row.get(raw_key_field)
-    if value is not None:
+def serialize_value(value: Any) -> Any:
+    """Convert common SQL driver values to JSON-compatible Raw column values."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Decimal):
+        # Preserve numeric precision in Raw rather than converting to a potentially lossy float.
         return str(value)
+    if isinstance(value, (dt.datetime, dt.date, dt.time)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.hex()
+    return json.dumps(value, default=str, ensure_ascii=False)
 
-    if table_name == "risk_cycle":
+
+def get_row_key(table_name: str, row: dict[str, Any], config: Config) -> str:
+    """Use the configured table primary key, with stable composite-key fallbacks."""
+    key_field = config.rms.raw_key_fields.get(table_name)
+    key_value = row.get(key_field) if key_field else None
+    if key_value is not None:
+        return str(key_value)
+
+    if table_name in {"risk_cycle", "risk_action"}:
         risk_id = row.get("risk_id")
         year_month = row.get("year_month")
+        suffix = row.get("action_no") if table_name == "risk_action" else None
         if risk_id is not None and year_month is not None:
-            return f"{risk_id}:{year_month}"
+            return f"{risk_id}:{year_month}" + (f":{suffix}" if suffix is not None else "")
 
-    return f"{table_name}:{hash(str(row))}"
+    raise ValueError(f"No usable configured key for row in table {table_name!r}")
 
 
-def upload_table_rows(upload_queue: RawUploadQueue, table_name: str, db_name: str, rows: list[dict], config: Config):
-    """Upload rows from a single RMS table to CDF Raw."""
-    for row in rows:
-        payload = {
-            key: _serialize_value(value)
-            for key, value in row.items()
-            if value is not None
-        }
+def iter_table_batches(engine, table_name: str, batch_size: int):
+    """Stream table records in bounded batches to avoid loading the full DB into memory."""
+    if not _IDENTIFIER.fullmatch(table_name):
+        raise ValueError(f"Invalid SQL table identifier: {table_name!r}")
+
+    with engine.connect() as connection:
+        result = connection.execution_options(stream_results=True).execute(text(f"SELECT * FROM {table_name}"))
+        while batch := result.mappings().fetchmany(batch_size):
+            yield batch
+
+
+def upload_table_rows(upload_queue: RawUploadQueue, table_name: str, database: str, rows, config: Config) -> int:
+    """Queue one batch of RMS records for CDF Raw upload."""
+    count = 0
+    for source_row in rows:
+        row = dict(source_row)
+        columns = {name: serialize_value(value) for name, value in row.items()}
         upload_queue.add_to_upload_queue(
-            database=db_name,
+            database=database,
             table=table_name,
-            raw_row=Row(key=get_table_key(table_name, payload, config), columns=payload),
+            raw_row=Row(key=get_row_key(table_name, row, config), columns=columns),
         )
+        count += 1
+    return count
 
 
 def run_extractor(cognite: CogniteClient, states: RawStateStore, config: Config, stop_event) -> None:
-    """Read RMS database tables and upload them to Cognite Raw."""
-    start_time = datetime.datetime.now(tz=datetime.timezone.utc)
-    extraction_pipeline_ext_id = config.cognite.extraction_pipeline.external_id
-
+    """Read configured RMS tables and upload them to Cognite Raw."""
+    start_time = dt.datetime.now(tz=dt.timezone.utc)
+    pipeline_external_id = config.cognite.extraction_pipeline.external_id
     metrics = safe_get(RMSMetrics, extractor_name="rms_extractor", extractor_version="1.0.0")
-    state_store, _last_run_utc, _last_run_epoch = create_state_store(cognite, config.raw)
+    state_store = create_state_store(cognite, config.raw)
+    engine = get_db_engine(config.rms.db.url)
 
-    db_url = config.rms.db.url
-    engine = get_db_engine(db_url)
+    # Restrict table names to known RMS model tables; also validate the SQL identifier.
+    allowed_tables = {"risk_master", "risk_cycle", "risk_action"}
+    unknown_tables = set(config.rms.table_names) - allowed_tables
+    if unknown_tables:
+        engine.dispose()
+        raise ValueError(f"Unsupported RMS table(s): {', '.join(sorted(unknown_tables))}")
+
     try:
         with RawUploadQueue(cdf_client=cognite, max_queue_size=10_000) as upload_queue:
             for table_name in config.rms.table_names:
                 if stop_event.is_set():
-                    logger.info("Stop signal received. Exiting before table %s upload.", table_name)
+                    logger.info("Stop signal received before processing table %s.", table_name)
                     return
 
-                rows = fetch_table_rows(engine, table_name)
-                metrics.risk_master_rows_read.labels(item_type=table_name).inc(len(rows)) if table_name == "risk_master" else None
-                metrics.risk_cycle_rows_read.labels(item_type=table_name).inc(len(rows)) if table_name == "risk_cycle" else None
-
-                if not rows:
-                    logger.info("No rows found in table %s.", table_name)
-                    continue
-
-                upload_table_rows(upload_queue, table_name, config.rms.raw_database, rows, config)
+                total = 0
+                for batch in iter_table_batches(engine, table_name, config.rms.db.batch_size):
+                    if stop_event.is_set():
+                        logger.info("Stop signal received while processing table %s.", table_name)
+                        return
+                    total += upload_table_rows(upload_queue, table_name, config.rms.raw_database, batch, config)
 
                 if table_name == "risk_master":
-                    metrics.risk_master_rows_uploaded.labels(item_type="risk_master").inc(len(rows))
+                    metrics.risk_master_rows_read.labels(item_type=table_name).inc(total)
+                    metrics.risk_master_rows_uploaded.labels(item_type=table_name).inc(total)
                 elif table_name == "risk_cycle":
-                    metrics.risk_cycle_rows_uploaded.labels(item_type="risk_cycle").inc(len(rows))
+                    metrics.risk_cycle_rows_read.labels(item_type=table_name).inc(total)
+                    metrics.risk_cycle_rows_uploaded.labels(item_type=table_name).inc(total)
 
-                logger.info("Uploaded %d rows from table %s to Raw.", len(rows), table_name)
+                logger.info("Queued %d rows from RMS table %s.", total, table_name)
 
-        state_store.set_state(external_id="last_run_utc", high=start_time.isoformat())
-        state_store.set_state(external_id="last_run_epoch", high=start_time.timestamp())
+        completed_at = dt.datetime.now(tz=dt.timezone.utc)
+        state_store.set_state(external_id="last_run_utc", high=completed_at.isoformat())
+        state_store.set_state(external_id="last_run_epoch", high=completed_at.timestamp())
         state_store.synchronize()
         cognite.extraction_pipelines.runs.create(
             ExtractionPipelineRunWrite(
                 status="success",
-                extpipe_external_id=extraction_pipeline_ext_id,
+                extpipe_external_id=pipeline_external_id,
                 message="RMS ingestion completed successfully.",
             )
         )
-
-        end_time = datetime.datetime.now(tz=datetime.timezone.utc)
-        metrics.run_duration_seconds.set((end_time - start_time).total_seconds())
+        metrics.run_duration_seconds.set((completed_at - start_time).total_seconds())
+        metrics.finish.set_to_current_time()
         logger.info("RMS extraction completed successfully.")
-
-    except Exception as e:
-        logger.exception("Unhandled exception: %s", e)
+    except Exception as exc:
+        logger.exception("RMS extraction failed: %s", exc)
         cognite.extraction_pipelines.runs.create(
             ExtractionPipelineRunWrite(
                 status="failure",
-                extpipe_external_id=extraction_pipeline_ext_id,
-                message=f"RMS ingestion failed: {e}",
+                extpipe_external_id=pipeline_external_id,
+                message="RMS ingestion failed. See extractor logs for details.",
             )
         )
         raise

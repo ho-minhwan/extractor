@@ -20,13 +20,16 @@ raw:
 
 rms:
     db:
+        # Current: SQLite file on the VM. Set this to its absolute path.
+        # PostgreSQL transition: set RMS_DB_URL to the SQLAlchemy URL documented in README.md.
         url: ${RMS_DB_URL}
-        query_timeout_seconds: 30
         batch_size: 500
     raw_database: ${CDF_RAW_DB}
     table_names:
         - risk_master
         - risk_cycle
+        - risk_action
     raw_key_fields:
         risk_master: risk_id
         risk_cycle: cycle_id
+        risk_action: action_id

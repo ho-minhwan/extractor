@@ -26,7 +26,6 @@ class DBConfig:
     """Database connection configuration."""
 
     url: str
-    query_timeout_seconds: int = 30
     batch_size: int = 500
 
 
@@ -36,9 +35,13 @@ class RMSConfig:
 
     db: DBConfig
     raw_database: str
-    table_names: list[str] = field(default_factory=lambda: ["risk_master", "risk_cycle"])
+    table_names: list[str] = field(default_factory=lambda: ["risk_master", "risk_cycle", "risk_action"])
     raw_key_fields: dict[str, str] = field(
-        default_factory=lambda: {"risk_master": "risk_id", "risk_cycle": "cycle_id"}
+        default_factory=lambda: {
+            "risk_master": "risk_id",
+            "risk_cycle": "cycle_id",
+            "risk_action": "action_id",
+        }
     )
 
 
